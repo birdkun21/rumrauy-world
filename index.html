@@ -2,7 +2,7 @@
 <html lang="th">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
 <title>Ramruay Cat World</title>
 <style>
   html, body {
@@ -15,10 +15,13 @@
   }
   canvas {
     display: block;
-    width: 100vw;
-    height: 100vh;
     margin: 0 auto;
     background: linear-gradient(#9fe2ff, #d7f6ff 50%, #fef7d6 50%, #f8e6b5 100%);
+    width: min(100vw, calc(100vh * 1.7777778));
+    height: min(56.25vw, 100vh);
+    max-width: 100vw;
+    max-height: 100vh;
+    object-fit: contain;
   }
 </style>
 </head>
@@ -27,8 +30,19 @@
 <script>
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
-canvas.width = 960;
-canvas.height = 540;
+
+const GAME_W = 960;
+const GAME_H = 540;
+canvas.width = GAME_W;
+canvas.height = GAME_H;
+
+function resizeCanvas() {
+  const scale = Math.min(window.innerWidth / GAME_W, window.innerHeight / GAME_H);
+  canvas.style.width = (GAME_W * scale) + "px";
+  canvas.style.height = (GAME_H * scale) + "px";
+}
+window.addEventListener("resize", resizeCanvas);
+resizeCanvas();
 
 const WORLD_WIDTH = 3600;
 const GROUND_Y = 430;
@@ -158,22 +172,48 @@ const flag = { x: 3460, y: 162, h: 280 };
 
 
 
+
+function rectOverlap(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+function spawnFoodSafe(x, y) {
+  const food = { x, y, w: 54, h: 54, collected: false };
+
+  // must be before goal
+  if (food.x + food.w >= flag.x - 40) return false;
+
+  // reject if intersecting any platform
+  for (const p of platforms) {
+    if (rectOverlap(food, p)) return false;
+  }
+
+  // reject if trapped underneath a low platform
+  for (const p of platforms) {
+    const horizontalOverlap = food.x + food.w > p.x && food.x < p.x + p.w;
+    const verticallyBelow = food.y >= p.y && food.y <= p.y + 90;
+    if (horizontalOverlap && verticallyBelow) return false;
+  }
+
+  foods.push(food);
+  return true;
+}
+
 function generateLevel() {
   platforms.length = 0;
   foods.length = 0;
   enemies.length = 0;
 
   const GOAL_X = flag.x;
-  const SAFE_END = GOAL_X - 260;         // nothing important after this
+  const SAFE_END = GOAL_X - 260;
   const GAP_MIN = 55;
-  const GAP_MAX = 110;                    // always jumpable
+  const GAP_MAX = 110;
   const GROUND_W_MIN = 280;
   const GROUND_W_MAX = 420;
   const PLAT_W_MIN = 110;
   const PLAT_W_MAX = 150;
-  const PLAT_TOP_MIN = 300;               // lower platform = easier jump
-  const PLAT_TOP_MAX = 370;               // never too high to reach
-  const FOOD_MARGIN = 70;
+  const PLAT_TOP_MIN = 300;
+  const PLAT_TOP_MAX = 370;
 
   let x = 0;
   let segmentIndex = 0;
@@ -188,52 +228,46 @@ function generateLevel() {
     const ground = {x:x, y:442, w:width, h:98, type:"ground"};
     platforms.push(ground);
 
-    // Guaranteed reachable floating platform on many segments
     const shouldPlacePlatform = remaining > 260 && (segmentIndex % 2 === 0 || Math.random() < 0.55);
     if (shouldPlacePlatform && width > 170) {
       const platW = PLAT_W_MIN + Math.random() * (PLAT_W_MAX - PLAT_W_MIN);
       const platX = x + 50 + Math.random() * Math.max(20, width - platW - 100);
       const platY = PLAT_TOP_MIN + Math.random() * (PLAT_TOP_MAX - PLAT_TOP_MIN);
 
-      platforms.push({
+      const plat = {
         x: platX,
         y: platY,
         w: platW,
         h: 20,
         type: "platform"
-      });
+      };
+      platforms.push(plat);
 
-      foods.push({
-        x: Math.min(platX + platW/2 - 27, SAFE_END - FOOD_MARGIN),
-        y: platY - 60,
-        w: 54,
-        h: 54,
-        collected: false
-      });
+      // food above platform
+      spawnFoodSafe(
+        Math.min(platX + platW / 2 - 27, SAFE_END - 70),
+        platY - 60
+      );
     }
 
-    // Ground food sometimes, but always before goal
+    // ground food only if clear
     if (Math.random() < 0.55 && width > 170) {
-      foods.push({
-        x: Math.min(x + 70 + Math.random() * (width - 140), SAFE_END - FOOD_MARGIN),
-        y: 442 - 62,
-        w: 54,
-        h: 54,
-        collected: false
-      });
+      spawnFoodSafe(
+        Math.min(x + 70 + Math.random() * (width - 140), SAFE_END - 70),
+        442 - 62
+      );
     }
 
-    // Enemies only on wide enough safe ground
     if (Math.random() < 0.65 && width > 210) {
       const enemyX = x + 75 + Math.random() * Math.max(40, width - 150);
       enemies.push({
-        x: enemyX,
+        x: Math.min(enemyX, GOAL_X - 170),
         y: 442 - 78,
         w: 78,
         h: 78,
         vx: (Math.random() < 0.5 ? -1 : 1) * (1 + Math.random() * 0.45),
         rangeL: x + 20,
-        rangeR: x + width - 20,
+        rangeR: Math.min(x + width - 20, GOAL_X - 60),
         alive: true
       });
     }
@@ -244,40 +278,25 @@ function generateLevel() {
     segmentIndex++;
   }
 
-  // Final guaranteed runway before goal
   const finalStart = Math.max(x, GOAL_X - 420);
   platforms.push({x: finalStart, y: 442, w: GOAL_X - finalStart + 120, h: 98, type:"ground"});
 
-  // clamp foods strictly before goal and remove impossible duplicates
-  const filteredFoods = [];
-  for (const f of foods) {
-    if (f.x + f.w >= GOAL_X - 40) {
-      f.x = GOAL_X - 100;
+  // final cleanup: remove foods hidden inside/under geometry
+  foods = foods.filter(f => {
+    if (f.x + f.w >= GOAL_X - 40) return false;
+    for (const p of platforms) {
+      if (rectOverlap(f, p)) return false;
+      const horizontalOverlap = f.x + f.w > p.x && f.x < p.x + p.w;
+      const verticallyBelow = f.y >= p.y && f.y <= p.y + 90;
+      if (horizontalOverlap && verticallyBelow) return false;
     }
-    if (f.x > 20 && f.x < GOAL_X - 40) {
-      filteredFoods.push(f);
-    }
-  }
-  foods.length = 0;
-  foods.push(...filteredFoods);
+    return true;
+  });
 
-  // clamp enemies strictly before goal and inside ranges
-  const filteredEnemies = [];
-  for (const e of enemies) {
-    if (e.x + e.w >= GOAL_X - 80) {
-      e.x = GOAL_X - 170;
-    }
-    if (e.rangeR > GOAL_X - 60) e.rangeR = GOAL_X - 60;
-    if (e.rangeL < 10) e.rangeL = 10;
-    if (e.rangeR - e.rangeL > 70 && e.x < GOAL_X - 80) {
-      filteredEnemies.push(e);
-    }
-  }
-  enemies.length = 0;
-  enemies.push(...filteredEnemies);
-
+  enemies = enemies.filter(e => e.x + e.w < GOAL_X - 60 && e.rangeR - e.rangeL > 70);
   totalEnemies = enemies.length;
 }
+
 
 
 function resetGame() {
@@ -880,8 +899,9 @@ function handlePointer(x, y, isDown) {
     return;
   }
   if (inputStart()) return;
-  const sx = x * (canvas.width / canvas.getBoundingClientRect().width);
-  const sy = y * (canvas.height / canvas.getBoundingClientRect().height);
+  const rect = canvas.getBoundingClientRect();
+  const sx = x * (canvas.width / rect.width);
+  const sy = y * (canvas.height / rect.height);
 
   if (sx < 150 && sy > 380) {
     keys.left = true; keys.right = false;
