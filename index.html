@@ -1,0 +1,919 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>Ramruay Cat World</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #8fd3ff;
+    overflow: hidden;
+    touch-action: none;
+    font-family: Arial, sans-serif;
+  }
+  canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+    margin: 0 auto;
+    background: linear-gradient(#9fe2ff, #d7f6ff 50%, #fef7d6 50%, #f8e6b5 100%);
+  }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+canvas.width = 960;
+canvas.height = 540;
+
+const WORLD_WIDTH = 3600;
+const GROUND_Y = 430;
+
+const keys = { left:false, right:false, jump:false };
+let started = false;
+let gameOver = false;
+let win = false;
+let score = 0;
+let foodsCollected = 0;
+let enemiesStomped = 0;
+let totalEnemies = 4;
+let secretAllStompBonus = 0;
+let timeFrames = 0;
+let finalTimeBonus = 0;
+let goalUnlocked = false;
+let cameraX = 0;
+let best = Number(localStorage.getItem("ramruay-cat-best") || 0);
+let audioReady = false;
+let audioCtx = null;
+
+const rumruayImg = new Image();
+rumruayImg.src = "rumruay.png";
+const foodImg = new Image();
+foodImg.src = "food.png";
+const enemyImg = new Image();
+enemyImg.src = "enemy.png";
+const bgImg = new Image();
+bgImg.src = "background.png";
+
+function ensureAudio() {
+  if (!audioCtx) {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (Ctx) audioCtx = new Ctx();
+  }
+  if (audioCtx && audioCtx.state === "suspended") audioCtx.resume();
+  audioReady = !!audioCtx;
+}
+function tone(freq, duration, type="square", volume=0.03, slide=null) {
+  if (!audioReady || !audioCtx) return;
+  const now = audioCtx.currentTime;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, now);
+  if (slide !== null) osc.frequency.exponentialRampToValueAtTime(Math.max(30, slide), now + duration);
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(volume, now + 0.01);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+  osc.connect(gain).connect(audioCtx.destination);
+  osc.start(now);
+  osc.stop(now + duration + 0.02);
+}
+function jumpSound(){ tone(420, 0.10, "square", 0.025, 620); }
+function collectSound(){ tone(700, 0.06, "triangle", 0.028, 980); setTimeout(()=>tone(980,0.05,"triangle",0.022,1240),40); }
+function stompSound(){ tone(170, 0.08, "square", 0.028, 120); }
+function hitSound(){ tone(220, 0.16, "sawtooth", 0.035, 70); }
+function winSound(){ tone(523,0.08,"triangle",0.03,660); setTimeout(()=>tone(659,0.08,"triangle",0.03,784),90); setTimeout(()=>tone(784,0.14,"triangle",0.035,1046),180); }
+
+const player = {
+  x: 80,
+  y: 200,
+  w: 86,
+  h: 86,
+  vx: 0,
+  vy: 0,
+  facing: 1,
+  onGround: false,
+  lives: 3,
+  invuln: 0
+};
+
+const platforms = [
+  {x:0,y:442,w:520,h:98,type:"ground"},
+  {x:560,y:442,w:470,h:98,type:"ground"},
+  {x:1080,y:442,w:520,h:98,type:"ground"},
+  {x:1660,y:442,w:540,h:98,type:"ground"},
+  {x:2260,y:442,w:480,h:98,type:"ground"},
+  {x:2810,y:442,w:790,h:98,type:"ground"},
+
+  {x:250,y:340,w:130,h:20,type:"platform"},
+  {x:470,y:285,w:120,h:20,type:"platform"},
+  {x:760,y:325,w:145,h:20,type:"platform"},
+  {x:980,y:265,w:130,h:20,type:"platform"},
+  {x:1270,y:305,w:150,h:20,type:"platform"},
+  {x:1510,y:245,w:130,h:20,type:"platform"},
+  {x:1830,y:330,w:150,h:20,type:"platform"},
+  {x:2060,y:275,w:120,h:20,type:"platform"},
+  {x:2360,y:315,w:145,h:20,type:"platform"},
+  {x:2600,y:250,w:120,h:20,type:"platform"},
+  {x:3000,y:300,w:160,h:20,type:"platform"},
+  {x:3260,y:235,w:150,h:20,type:"platform"},
+];
+
+const foods = [
+  {x:280,y:278,w:54,h:54,collected:false},
+  {x:500,y:223,w:54,h:54,collected:false},
+  {x:790,y:263,w:54,h:54,collected:false},
+  {x:1010,y:203,w:54,h:54,collected:false},
+  {x:1300,y:243,w:54,h:54,collected:false},
+  {x:1540,y:183,w:54,h:54,collected:false},
+  {x:1860,y:268,w:54,h:54,collected:false},
+  {x:2090,y:213,w:54,h:54,collected:false},
+  {x:2390,y:253,w:54,h:54,collected:false},
+  {x:2630,y:188,w:54,h:54,collected:false},
+  {x:3040,y:238,w:54,h:54,collected:false},
+  {x:3290,y:173,w:54,h:54,collected:false},
+];
+
+const defeatedEffects = [];
+let showSecretBonusMessage = false;
+
+const enemies = [
+  {x:660,y:442-78,w:78,h:78,vx:-1.2,rangeL:590,rangeR:860,alive:true},
+  {x:1180,y:442-78,w:78,h:78,vx:1.1,rangeL:1110,rangeR:1470,alive:true},
+  {x:1760,y:442-78,w:78,h:78,vx:1.25,rangeL:1700,rangeR:2060,alive:true},
+  {x:2890,y:442-78,w:78,h:78,vx:-1.45,rangeL:2840,rangeR:3220,alive:true},
+];
+
+const yarns = [];
+for (let i=0;i<26;i++) {
+  const x = 180 + i*130;
+  yarns.push({x, y: GROUND_Y + 26 + Math.sin(i)*6, r: 12 + (i%3)*2});
+}
+
+const flag = { x: 3460, y: 162, h: 280 };
+
+
+
+function generateLevel() {
+  platforms.length = 0;
+  foods.length = 0;
+  enemies.length = 0;
+
+  const GOAL_X = flag.x;
+  const SAFE_END = GOAL_X - 260;         // nothing important after this
+  const GAP_MIN = 55;
+  const GAP_MAX = 110;                    // always jumpable
+  const GROUND_W_MIN = 280;
+  const GROUND_W_MAX = 420;
+  const PLAT_W_MIN = 110;
+  const PLAT_W_MAX = 150;
+  const PLAT_TOP_MIN = 300;               // lower platform = easier jump
+  const PLAT_TOP_MAX = 370;               // never too high to reach
+  const FOOD_MARGIN = 70;
+
+  let x = 0;
+  let segmentIndex = 0;
+
+  while (x < SAFE_END) {
+    const remaining = SAFE_END - x;
+    const width = Math.min(
+      remaining,
+      GROUND_W_MIN + Math.random() * (GROUND_W_MAX - GROUND_W_MIN)
+    );
+
+    const ground = {x:x, y:442, w:width, h:98, type:"ground"};
+    platforms.push(ground);
+
+    // Guaranteed reachable floating platform on many segments
+    const shouldPlacePlatform = remaining > 260 && (segmentIndex % 2 === 0 || Math.random() < 0.55);
+    if (shouldPlacePlatform && width > 170) {
+      const platW = PLAT_W_MIN + Math.random() * (PLAT_W_MAX - PLAT_W_MIN);
+      const platX = x + 50 + Math.random() * Math.max(20, width - platW - 100);
+      const platY = PLAT_TOP_MIN + Math.random() * (PLAT_TOP_MAX - PLAT_TOP_MIN);
+
+      platforms.push({
+        x: platX,
+        y: platY,
+        w: platW,
+        h: 20,
+        type: "platform"
+      });
+
+      foods.push({
+        x: Math.min(platX + platW/2 - 27, SAFE_END - FOOD_MARGIN),
+        y: platY - 60,
+        w: 54,
+        h: 54,
+        collected: false
+      });
+    }
+
+    // Ground food sometimes, but always before goal
+    if (Math.random() < 0.55 && width > 170) {
+      foods.push({
+        x: Math.min(x + 70 + Math.random() * (width - 140), SAFE_END - FOOD_MARGIN),
+        y: 442 - 62,
+        w: 54,
+        h: 54,
+        collected: false
+      });
+    }
+
+    // Enemies only on wide enough safe ground
+    if (Math.random() < 0.65 && width > 210) {
+      const enemyX = x + 75 + Math.random() * Math.max(40, width - 150);
+      enemies.push({
+        x: enemyX,
+        y: 442 - 78,
+        w: 78,
+        h: 78,
+        vx: (Math.random() < 0.5 ? -1 : 1) * (1 + Math.random() * 0.45),
+        rangeL: x + 20,
+        rangeR: x + width - 20,
+        alive: true
+      });
+    }
+
+    if (remaining <= GROUND_W_MAX + 10) break;
+
+    x += width + GAP_MIN + Math.random() * (GAP_MAX - GAP_MIN);
+    segmentIndex++;
+  }
+
+  // Final guaranteed runway before goal
+  const finalStart = Math.max(x, GOAL_X - 420);
+  platforms.push({x: finalStart, y: 442, w: GOAL_X - finalStart + 120, h: 98, type:"ground"});
+
+  // clamp foods strictly before goal and remove impossible duplicates
+  const filteredFoods = [];
+  for (const f of foods) {
+    if (f.x + f.w >= GOAL_X - 40) {
+      f.x = GOAL_X - 100;
+    }
+    if (f.x > 20 && f.x < GOAL_X - 40) {
+      filteredFoods.push(f);
+    }
+  }
+  foods.length = 0;
+  foods.push(...filteredFoods);
+
+  // clamp enemies strictly before goal and inside ranges
+  const filteredEnemies = [];
+  for (const e of enemies) {
+    if (e.x + e.w >= GOAL_X - 80) {
+      e.x = GOAL_X - 170;
+    }
+    if (e.rangeR > GOAL_X - 60) e.rangeR = GOAL_X - 60;
+    if (e.rangeL < 10) e.rangeL = 10;
+    if (e.rangeR - e.rangeL > 70 && e.x < GOAL_X - 80) {
+      filteredEnemies.push(e);
+    }
+  }
+  enemies.length = 0;
+  enemies.push(...filteredEnemies);
+
+  totalEnemies = enemies.length;
+}
+
+
+function resetGame() {
+  started = true;
+  gameOver = false;
+  win = false;
+  score = 0;
+  foodsCollected = 0;
+  enemiesStomped = 0;
+  secretAllStompBonus = 0;
+  timeFrames = 0;
+  finalTimeBonus = 0;
+  goalUnlocked = false;
+  showSecretBonusMessage = false;
+  defeatedEffects.length = 0;
+  cameraX = 0;
+  player.x = 80;
+  player.y = 200;
+  player.vx = 0;
+  player.vy = 0;
+  player.facing = 1;
+  player.onGround = false;
+  player.invuln = 0;
+  player.lives = 3;
+  generateLevel();
+  for (const f of foods) f.collected = false;
+  for (const e of enemies) {
+    e.alive = true;
+  }
+}
+
+function rectsOverlap(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+function handleInput() {
+  const accel = 0.8;
+  const maxSpeed = 5.5;
+  if (keys.left) {
+    player.vx -= accel;
+    player.facing = -1;
+  }
+  if (keys.right) {
+    player.vx += accel;
+    player.facing = 1;
+  }
+  if (!keys.left && !keys.right) {
+    player.vx *= 0.82;
+    if (Math.abs(player.vx) < 0.05) player.vx = 0;
+  }
+  player.vx = Math.max(-maxSpeed, Math.min(maxSpeed, player.vx));
+
+  if (keys.jump && player.onGround) {
+    player.vy = -14.6;
+    player.onGround = false;
+    jumpSound();
+  }
+  keys.jump = false;
+}
+
+function updatePlayer() {
+  handleInput();
+  player.vy += 0.72;
+  if (player.vy > 16) player.vy = 16;
+
+  // Horizontal
+  player.x += player.vx;
+  const pRectX = {x:player.x, y:player.y, w:player.w, h:player.h};
+  for (const p of platforms) {
+    if (rectsOverlap(pRectX, p)) {
+      if (player.vx > 0) player.x = p.x - player.w;
+      if (player.vx < 0) player.x = p.x + p.w;
+      player.vx = 0;
+    }
+  }
+
+  // Vertical
+  player.y += player.vy;
+  player.onGround = false;
+  const pRectY = {x:player.x, y:player.y, w:player.w, h:player.h};
+  for (const p of platforms) {
+    if (rectsOverlap(pRectY, p)) {
+      if (player.vy > 0 && player.y + player.h - player.vy <= p.y + 8) {
+        player.y = p.y - player.h;
+        player.vy = 0;
+        player.onGround = true;
+      } else if (player.vy < 0 && player.y - player.vy >= p.y + p.h - 8) {
+        player.y = p.y + p.h;
+        player.vy = 0.2;
+      }
+    }
+  }
+
+  if (player.x < 0) player.x = 0;
+  if (player.x > WORLD_WIDTH - player.w) player.x = WORLD_WIDTH - player.w;
+
+  if (!goalUnlocked) {
+    const gate = {x: flag.x - 20, y: flag.y, w: 24, h: flag.h + 120};
+    if (rectsOverlap({x:player.x, y:player.y, w:player.w, h:player.h}, gate)) {
+      if (player.vx > 0) player.x = gate.x - player.w;
+    }
+  }
+  if (player.y > canvas.height + 200) {
+    loseLife();
+  }
+
+  if (player.invuln > 0) player.invuln--;
+}
+
+function loseLife() {
+  if (player.invuln > 0 || gameOver || win) return;
+  player.lives--;
+  hitSound();
+  if (player.lives <= 0) {
+    gameOver = true;
+    best = Math.max(best, score);
+    localStorage.setItem("ramruay-cat-best", String(best));
+  } else {
+    player.x = Math.max(40, player.x - 120);
+    player.y = 120;
+    player.vx = 0;
+    player.vy = -6;
+    player.invuln = 90;
+  }
+}
+
+function updateFoods() {
+  for (const f of foods) {
+    if (f.collected) continue;
+    if (rectsOverlap(player, f)) {
+      f.collected = true;
+      foodsCollected++;
+      score += 100;
+      collectSound();
+      if (foodsCollected >= foods.length) {
+        goalUnlocked = true;
+      }
+    }
+  }
+}
+
+function updateEnemies() {
+  for (const e of enemies) {
+    if (!e.alive) continue;
+    e.x += e.vx;
+    if (e.x <= e.rangeL || e.x + e.w >= e.rangeR) e.vx *= -1;
+
+    if (rectsOverlap(player, e)) {
+      const playerBottomPrev = (player.y + player.h) - player.vy;
+      if (player.vy > 1 && playerBottomPrev <= e.y + 16) {
+        e.alive = false;
+        defeatedEffects.push({
+          x: e.x,
+          y: e.y,
+          w: e.w,
+          h: e.h,
+          alpha: 1,
+          vy: -0.55
+        });
+        enemiesStomped++;
+        player.vy = -9.6;
+        score += 150;
+        stompSound();
+      } else {
+        loseLife();
+      }
+    }
+  }
+}
+
+function updateDefeatedEffects() {
+  for (let i = defeatedEffects.length - 1; i >= 0; i--) {
+    const d = defeatedEffects[i];
+    d.y += d.vy;
+    d.alpha -= 0.018;
+    if (d.alpha <= 0) defeatedEffects.splice(i, 1);
+  }
+}
+
+function updateCamera() {
+  const target = player.x - canvas.width * 0.35;
+  cameraX += (target - cameraX) * 0.12;
+  cameraX = Math.max(0, Math.min(WORLD_WIDTH - canvas.width, cameraX));
+}
+
+function checkWin() {
+  if (!goalUnlocked) return;
+  if (player.x + player.w > flag.x - 8 && player.y + player.h > flag.y) {
+    win = true;
+    const seconds = timeFrames / 60;
+    finalTimeBonus = Math.max(0, Math.floor(3000 - seconds * 120));
+    if (enemiesStomped >= totalEnemies) {
+      secretAllStompBonus = 1500;
+      showSecretBonusMessage = true;
+    }
+    score += finalTimeBonus + secretAllStompBonus;
+    best = Math.max(best, score);
+    localStorage.setItem("ramruay-cat-best", String(best));
+    winSound();
+  }
+}
+
+function update() {
+  if (!started || gameOver || win) return;
+  timeFrames++;
+  updatePlayer();
+  updateFoods();
+  updateEnemies();
+  updateDefeatedEffects();
+  updateCamera();
+  checkWin();
+}
+
+function drawCloud(x, y, s=1) {
+  ctx.fillStyle = "rgba(255,255,255,0.9)";
+  ctx.beginPath();
+  ctx.arc(x, y, 22*s, 0, Math.PI*2);
+  ctx.arc(x+20*s, y-10*s, 18*s, 0, Math.PI*2);
+  ctx.arc(x+44*s, y, 24*s, 0, Math.PI*2);
+  ctx.fill();
+}
+
+function drawPawBlock(x,y,w,h,color1,color2) {
+  ctx.fillStyle = color1;
+  ctx.fillRect(x,y,w,h);
+  ctx.strokeStyle = "#4c3318";
+  ctx.lineWidth = 3;
+  ctx.strokeRect(x,y,w,h);
+  ctx.fillStyle = color2;
+  ctx.beginPath();
+  ctx.arc(x+w/2, y+h/2+6, h*0.18, 0, Math.PI*2);
+  ctx.fill();
+  for (let i=-1;i<=1;i++) {
+    ctx.beginPath();
+    ctx.arc(x+w/2 + i*14, y+h/2-10, h*0.08, 0, Math.PI*2);
+    ctx.fill();
+  }
+}
+
+function drawBackground() {
+  ctx.fillStyle = "#7fc7ff";
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+
+  if (bgImg.complete) {
+    const imgW = 640;
+    const imgH = 360;
+    const scaledH = canvas.height;
+    const scaledW = imgW * (scaledH / imgH);
+    const parallax = cameraX * 0.22;
+    for (let x = -(parallax % scaledW) - scaledW; x < canvas.width + scaledW; x += scaledW) {
+      ctx.drawImage(bgImg, x, 0, scaledW, scaledH);
+    }
+  }
+
+  // DARKEN BACKGROUND FOR CONTRAST
+  ctx.fillStyle = "rgba(0,0,0,0.28)";
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+}
+
+function drawPlatforms() {
+  for (const p of platforms) {
+    const x = p.x - cameraX;
+    if (x + p.w < -20 || x > canvas.width+20) continue;
+
+    if (p.type === "ground") {
+      ctx.fillStyle = "#3a1f0f";
+      ctx.fillRect(x, p.y, p.w, p.h);
+
+      ctx.fillStyle = "#6ee15a";
+      ctx.fillRect(x, p.y, p.w, 22);
+
+      ctx.fillStyle = "#2a9e2a";
+      for (let i = 0; i < p.w; i += 22) {
+        ctx.fillRect(x + i, p.y + 14, 10, 8);
+      }
+
+      ctx.fillStyle = "#d07436";
+      for (let i = 0; i < p.w; i += 32) {
+        ctx.fillRect(x + i, p.y + 36, 14, 14);
+        ctx.fillRect(x + i + 10, p.y + 60, 14, 14);
+      }
+
+      ctx.strokeStyle = "rgba(0,0,0,0.45)";
+      ctx.strokeRect(x, p.y, p.w, p.h);
+
+    } else {
+      ctx.fillStyle = "#ff5aa5";
+      ctx.fillRect(x, p.y, p.w, p.h);
+
+      ctx.fillStyle = "#ffc1dd";
+      ctx.fillRect(x, p.y, p.w, 6);
+
+      ctx.strokeStyle = "rgba(0,0,0,0.5)";
+      ctx.strokeRect(x, p.y, p.w, p.h);
+    }
+  }
+}
+
+function drawFoods() {
+  const t = performance.now()*0.004;
+  for (const f of foods) {
+    if (f.collected) continue;
+    const x = f.x - cameraX;
+    const y = f.y + Math.sin(t + f.x*0.02)*5;
+    if (x + f.w < -20 || x > canvas.width+20) continue;
+    ctx.save();
+    ctx.translate(x+f.w/2, y+f.h/2);
+    ctx.rotate(Math.sin(t + f.x*0.01)*0.06);
+    ctx.drawImage(foodImg, -f.w/2, -f.h/2, f.w, f.h);
+    ctx.restore();
+  }
+}
+
+function drawDefeatedEffects() {
+  for (const d of defeatedEffects) {
+    const x = d.x - cameraX;
+    if (x + d.w < -40 || x > canvas.width + 40) continue;
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, d.alpha);
+    ctx.translate(x + d.w/2, d.y + d.h/2);
+    
+// shadow
+ctx.save();
+ctx.globalAlpha = 0.18 * d.alpha;
+ctx.fillStyle = "#000";
+ctx.beginPath();
+ctx.ellipse(0, d.h/2 - 4, d.w*0.35, 10, 0, 0, Math.PI*2);
+ctx.fill();
+ctx.restore();
+
+drawBrightImage(enemyImg, -d.w/2, -d.h/2, d.w, d.h);
+
+    ctx.restore();
+  }
+}
+
+
+function drawEnemies() {
+  for (const e of enemies) {
+    if (!e.alive) continue;
+    const x = e.x - cameraX;
+    if (x + e.w < -20 || x > canvas.width+20) continue;
+    const t = performance.now() * 0.016 + e.x * 0.02;
+    const bob = Math.sin(t) * 2.5;
+    ctx.save();
+    ctx.translate(x + e.w/2, e.y + e.h/2 + bob);
+
+    // shadow
+    ctx.save();
+    ctx.globalAlpha = 0.25;
+    ctx.fillStyle = "#000";
+    ctx.beginPath();
+    ctx.ellipse(0, e.h/2 - 2, e.w*0.34, 8, 0, 0, Math.PI*2);
+    ctx.fill();
+    ctx.restore();
+
+    if (e.vx < 0) ctx.scale(-1,1);
+    ctx.rotate(Math.sin(t) * 0.02);
+    drawBrightImage(enemyImg, -e.w/2, -e.h/2, e.w, e.h);
+    ctx.restore();
+  }
+}
+
+
+function drawFlag() {
+  const x = flag.x - cameraX;
+  if (x < -40 || x > canvas.width+40) return;
+  ctx.fillStyle = "#8b5a2b";
+  ctx.fillRect(x, flag.y, 10, flag.h);
+  ctx.fillStyle = goalUnlocked ? "#ff9fc8" : "#8e8e8e";
+  ctx.beginPath();
+  ctx.moveTo(x+10, flag.y+8);
+  ctx.lineTo(x+90, flag.y+28);
+  ctx.lineTo(x+10, flag.y+52);
+  ctx.fill();
+  ctx.fillStyle = "#fff5f9";
+  ctx.beginPath();
+  ctx.arc(x+36, flag.y+30, 10, 0, Math.PI*2);
+  ctx.fill();
+  for (let i=0;i<4;i++){
+    ctx.beginPath();
+    ctx.arc(x+36 + (i-1.5)*9, flag.y+16, 4, 0, Math.PI*2); ctx.fill();
+  }
+  if (!goalUnlocked) {
+    ctx.fillStyle = "#6b4b24";
+    ctx.fillRect(x-24, flag.y+92, 64, 48);
+    ctx.fillStyle = "#ffd36e";
+    ctx.fillRect(x-4, flag.y+108, 24, 22);
+    ctx.strokeStyle = "#6b4b24";
+    ctx.lineWidth = 6;
+    ctx.beginPath();
+    ctx.arc(x+8, flag.y+108, 14, Math.PI, 0);
+    ctx.stroke();
+  }
+}
+
+
+
+
+
+function drawBrightImage(img, x, y, w, h) {
+  ctx.save();
+  ctx.filter = "brightness(1.12) contrast(1.08)";
+  ctx.drawImage(img, x, y, w, h);
+  ctx.restore();
+}
+
+
+function drawPlayer() {
+  const blink = player.invuln > 0 && Math.floor(player.invuln/6)%2===0;
+  if (blink) return;
+
+  const x = player.x - cameraX;
+  const speedAbs = Math.abs(player.vx);
+  const t = performance.now() * 0.014;
+  const walking = player.onGround && speedAbs > 0.2;
+
+  const bob = walking ? Math.sin(t) * Math.min(6, 2 + speedAbs * 0.7) : 0;
+  const squashX = walking ? 1 + Math.abs(Math.sin(t)) * 0.035 : 1;
+  const squashY = walking ? 1 - Math.abs(Math.sin(t)) * 0.03 : 1;
+  const tilt = walking ? Math.sin(t) * 0.035 : (player.onGround ? 0 : Math.max(-0.12, Math.min(0.12, player.vx * 0.01)));
+
+  ctx.save();
+  ctx.translate(x + player.w/2, player.y + bob + player.h/2);
+
+  // shadow
+  ctx.save();
+  ctx.globalAlpha = 0.25;
+  ctx.fillStyle = "#000";
+  ctx.beginPath();
+  ctx.ellipse(0, player.h/2 - 2, player.w * (walking ? 0.32 + Math.abs(Math.sin(t))*0.03 : 0.35), walking ? 8 : 10, 0, 0, Math.PI*2);
+  ctx.fill();
+  ctx.restore();
+
+  // face right by default; flip only when moving left
+  if (player.facing < 0) ctx.scale(-1, 1);
+
+  ctx.rotate(tilt);
+  ctx.scale(squashX, squashY);
+
+  drawBrightImage(rumruayImg, -player.w/2, -player.h/2, player.w, player.h);
+  ctx.restore();
+}
+
+
+function drawHUD() {
+  ctx.fillStyle = "rgba(255,255,255,0.78)";
+  ctx.fillRect(14, 14, 340, 132);
+  ctx.fillStyle = "#40230f";
+  ctx.font = "bold 28px Arial";
+  ctx.fillText("Score: " + Math.floor(score), 28, 46);
+  ctx.fillText("Food: " + foodsCollected + "/" + foods.length + "  Stomp: " + enemiesStomped, 28, 78);
+  ctx.font = "bold 22px Arial";
+  ctx.fillStyle = goalUnlocked ? "#1f8b3a" : "#8a3b12";
+  ctx.fillText(goalUnlocked ? "ประตูเส้นชัยเปิดแล้ว" : "ต้องเก็บอาหารให้ครบก่อน", 28, 136);
+  ctx.fillStyle = "#40230f";
+  ctx.font = "bold 28px Arial";
+  ctx.fillText("Lives: " + "❤".repeat(player.lives), 28, 106);
+
+  const barW = 220;
+  ctx.fillStyle = "rgba(255,255,255,0.78)";
+  ctx.fillRect(canvas.width-290, 18, 270, 66);
+  ctx.fillStyle = "#40230f";
+  ctx.font = "bold 18px Arial";
+  ctx.fillText(goalUnlocked ? "Goal Open" : "Food Lock", canvas.width-274, 40);
+  ctx.fillStyle = goalUnlocked ? "#70c36a" : "#f0a24f";
+  const meter = goalUnlocked ? 1 : (foodsCollected / foods.length);
+  ctx.fillRect(canvas.width-274, 50, 238 * meter, 20);
+  ctx.strokeStyle = "#7a4a1d";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(canvas.width-274, 50, 238, 20);
+}
+
+function drawStart() {
+  ctx.fillStyle = "rgba(255,255,255,0.82)";
+  ctx.fillRect(140, 95, 680, 370);
+  ctx.fillStyle = "#40230f";
+  ctx.textAlign = "center";
+  ctx.font = "bold 42px Arial";
+  ctx.fillText("Ramruay Cat World", canvas.width/2, 180);
+  ctx.font = "26px Arial";
+  ctx.fillText("เกมแพลตฟอร์มแนว Mario ธีมแมว", canvas.width/2, 228);
+  ctx.fillText("เดินซ้าย/ขวา  •  กระโดดเก็บก๋วยเตี๋ยว", canvas.width/2, 270);
+  ctx.fillText("คะแนนได้จากเก็บอาหาร + เหยียบแมวดำ", canvas.width/2, 310);
+  ctx.fillText("ต้องเก็บอาหารครบก่อน ประตูเส้นชัยถึงเปิด", canvas.width/2, 350);
+  ctx.fillText("เข้าธงให้เร็ว = โบนัสเวลา", canvas.width/2, 390);
+  ctx.fillText("แตะจอหรือกด Space เพื่อเริ่ม", canvas.width/2, 430);
+  ctx.textAlign = "start";
+}
+
+function drawEndBox(title, subtitle) {
+  ctx.fillStyle = "rgba(0,0,0,0.42)";
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+  ctx.fillStyle = "#fff8e1";
+  ctx.fillRect(145, 95, 670, 340);
+  ctx.fillStyle = "#40230f";
+  ctx.textAlign = "center";
+  ctx.font = "bold 48px Arial";
+  ctx.fillText(title, canvas.width/2, 160);
+  ctx.font = "28px Arial";
+  ctx.fillText("Score: " + Math.floor(score), canvas.width/2, 205);
+  if (win) {
+    const sec = (timeFrames / 60).toFixed(1);
+    ctx.fillText("Food Bonus: " + (foodsCollected * 100), canvas.width/2, 245);
+    ctx.fillText("Stomp Bonus: " + (enemiesStomped * 150), canvas.width/2, 280);
+    ctx.fillText("Time Bonus: " + finalTimeBonus + "  (" + sec + "s)", canvas.width/2, 315);
+    if (showSecretBonusMessage) {
+      ctx.font = "bold 24px Arial";
+      ctx.fillStyle = "#b03a6e";
+      ctx.fillText("คุณเก่งมาก คุณเหยียบแมวดำใจร้ายตายหมด", canvas.width/2, 355);
+      ctx.fillText("รับโบนัสไป 1500 แต้ม อิอิ", canvas.width/2, 388);
+      ctx.fillStyle = "#40230f";
+      ctx.font = "28px Arial";
+    }
+  }
+  ctx.fillText(subtitle, canvas.width/2, 425);
+  ctx.fillText("Best: " + Math.floor(best), canvas.width/2, 460);
+  ctx.textAlign = "start";
+}
+
+function drawTouchControls() {
+  ctx.globalAlpha = 0.18;
+  // left
+  ctx.fillStyle = "#000";
+  ctx.beginPath();
+  ctx.arc(100, 460, 46, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(84,460); ctx.lineTo(112,442); ctx.lineTo(112,478); ctx.fillStyle="#fff"; ctx.fill();
+  // right
+  ctx.fillStyle = "#000";
+  ctx.beginPath();
+  ctx.arc(210, 460, 46, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(226,460); ctx.lineTo(198,442); ctx.lineTo(198,478); ctx.fillStyle="#fff"; ctx.fill();
+  // jump
+  ctx.fillStyle = "#000";
+  ctx.beginPath();
+  ctx.arc(860, 450, 58, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 24px Arial";
+  ctx.textAlign = "center";
+  ctx.fillText("JUMP", 860, 458);
+  ctx.textAlign = "start";
+  ctx.globalAlpha = 1;
+}
+
+function draw() {
+  drawBackground();
+  drawPlatforms();
+  drawFoods();
+  drawEnemies();
+  drawDefeatedEffects();
+  drawFlag();
+  drawPlayer();
+  drawHUD();
+  drawTouchControls();
+
+  if (!started) drawStart();
+  if (gameOver) drawEndBox("Game Over", "แตะจอเพื่อเล่นใหม่");
+  if (win) drawEndBox("You Win!", "แตะจอเพื่อเล่นใหม่");
+}
+
+function loop() {
+  update();
+  draw();
+  requestAnimationFrame(loop);
+}
+loop();
+
+function inputStart() {
+  ensureAudio();
+  if (!started) {
+    resetGame();
+    return true;
+  }
+  if (gameOver || win) {
+    resetGame();
+    return true;
+  }
+  return false;
+}
+
+window.addEventListener("keydown", (e) => {
+  if (["ArrowLeft","KeyA"].includes(e.code)) keys.left = true;
+  if (["ArrowRight","KeyD"].includes(e.code)) keys.right = true;
+  if (["ArrowUp","Space","KeyW"].includes(e.code)) {
+    e.preventDefault();
+    if (!inputStart()) keys.jump = true;
+  }
+});
+window.addEventListener("keyup", (e) => {
+  if (["ArrowLeft","KeyA"].includes(e.code)) keys.left = false;
+  if (["ArrowRight","KeyD"].includes(e.code)) keys.right = false;
+});
+
+function handlePointer(x, y, isDown) {
+  if (!isDown) {
+    keys.left = false;
+    keys.right = false;
+    return;
+  }
+  if (inputStart()) return;
+  const sx = x * (canvas.width / canvas.getBoundingClientRect().width);
+  const sy = y * (canvas.height / canvas.getBoundingClientRect().height);
+
+  if (sx < 150 && sy > 380) {
+    keys.left = true; keys.right = false;
+  } else if (sx < 280 && sy > 380) {
+    keys.right = true; keys.left = false;
+  } else if (sx > 760 && sy > 350) {
+    keys.jump = true;
+  }
+}
+
+canvas.addEventListener("mousedown", (e)=>handlePointer(e.offsetX,e.offsetY,true));
+window.addEventListener("mouseup", ()=>{ keys.left=false; keys.right=false; });
+
+canvas.addEventListener("touchstart", (e)=>{
+  e.preventDefault();
+  const t = e.changedTouches[0];
+  const rect = canvas.getBoundingClientRect();
+  handlePointer(t.clientX - rect.left, t.clientY - rect.top, true);
+}, {passive:false});
+
+canvas.addEventListener("touchmove", (e)=>{
+  e.preventDefault();
+  const t = e.changedTouches[0];
+  const rect = canvas.getBoundingClientRect();
+  handlePointer(t.clientX - rect.left, t.clientY - rect.top, true);
+}, {passive:false});
+
+canvas.addEventListener("touchend", (e)=>{
+  e.preventDefault();
+  keys.left = false;
+  keys.right = false;
+}, {passive:false});
+</script>
+</body>
+</html>
